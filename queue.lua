@@ -351,6 +351,14 @@ function QlessQueue:pop(now, worker, count)
     if tracked then
       Qless.publish('popped', jid)
     end
+
+    local throttle = tonumber(
+      Qless.config.get(self.name .. '-throttle', 0))
+    if throttle > 0 then
+      redis.call('set', QlessQueue.ns .. self.name .. ':ttl:' .. jid, throttle)
+      redis.call('expire', QlessQueue.ns .. self.name .. ':ttl:' .. jid, throttle)
+    end
+
   end
 
   -- If we are returning any jobs, then we should remove them from the work
@@ -531,6 +539,8 @@ function QlessQueue:put(now, worker, jid, klass, raw_data, delay, ...)
     redis.call('hincrby', 'ql:s:stats:' .. bin .. ':' .. self.name, 'failed'  , -1)
   end
 
+  local throttle = tonumber(redis.call('ttl', QlessQueue.ns .. self.name .. ':ttl:' .. jid))
+
   -- First, let's save its data
   redis.call('hmset', QlessJob.ns .. jid,
     'jid'      , jid,
@@ -538,7 +548,7 @@ function QlessQueue:put(now, worker, jid, klass, raw_data, delay, ...)
     'data'     , raw_data,
     'priority' , priority,
     'tags'     , cjson.encode(tags),
-    'state'    , ((delay > 0) and 'scheduled') or 'waiting',
+    'state'    , ((delay > 0 or throttle > 0) and 'scheduled') or 'waiting',
     'worker'   , '',
     'expires'  , 0,
     'queue'    , self.name,
@@ -559,16 +569,16 @@ function QlessQueue:put(now, worker, jid, klass, raw_data, delay, ...)
   -- Now, if a delay was provided, and if it's in the future,
   -- then we'll have to schedule it. Otherwise, we're just
   -- going to add it to the work queue.
-  if delay > 0 then
+  if delay > 0 or throttle > 0 then
     if redis.call('scard', QlessJob.ns .. jid .. '-dependencies') > 0 then
       -- We've already put it in 'depends'. Now, we must just save the data
       -- for when it's scheduled
       self.depends.add(now, jid)
       redis.call('hmset', QlessJob.ns .. jid,
         'state', 'depends',
-        'scheduled', now + delay)
+        'scheduled', now + math.max(delay, throttle))
     else
-      self.scheduled.add(now + delay, jid)
+      self.scheduled.add(now + math.max(delay, throttle), jid)
     end
   else
     if redis.call('scard', QlessJob.ns .. jid .. '-dependencies') > 0 then
