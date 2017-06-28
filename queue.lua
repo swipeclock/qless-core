@@ -439,6 +439,13 @@ function QlessQueue:put(now, worker, jid, klass, raw_data, delay, ...)
     unpack(redis.call('hmget', QlessJob.ns .. jid, 'priority', 'tags',
       'queue', 'state', 'failure', 'retries', 'worker'))
 
+  local replace = assert(tonumber(options['replace'] or 1) ,
+    'Put(): Arg "replace" not a number: ' .. tostring(options['replace']))
+
+  if replace == 0 and state == 'running' then
+    return nil
+  end
+
   -- If there are old tags, then we should remove the tags this job has
   if tags then
     Qless.tag(now, 'remove', jid, unpack(cjson.decode(tags)))
@@ -676,10 +683,17 @@ function QlessQueue:recur(now, jid, klass, raw_data, spec, ...)
     options.backlog = assert(tonumber(options.backlog  or 0),
       'Recur(): Arg "backlog" not a number: ' .. tostring(
         options.backlog))
+    options.replace = assert(tonumber(options.replace or 1),
+      'Recur(): Arg "replace" not a number: ' .. tostring(
+        options.replace))
 
     local count, old_queue = unpack(redis.call('hmget', 'ql:r:' .. jid, 'count', 'queue'))
     count = count or 0
 
+    if count ~= 0 and options.replace == 0 then
+      return nil
+    end
+    
     -- If it has previously been in another queue, then we should remove
     -- some information about it
     if old_queue then
