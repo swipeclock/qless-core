@@ -656,6 +656,16 @@ function QlessJob:heartbeat(now, worker, data)
     local queue = Qless.queue(
       redis.call('hget', QlessJob.ns .. self.jid, 'queue'))
     queue.locks.add(expires, self.jid)
+
+    local encoded = cjson.encode({
+      jid    = self.jid,
+      event  = 'heartbeat',
+      expires = expires,
+      worker = worker
+    })
+    Qless.publish('w:' .. worker, encoded)
+    Qless.publish('log', encoded)
+  
     return expires
   end
 end
